@@ -18,6 +18,8 @@ int main(int argc, char *argv[]) {
 			*it = rand() % 10;
 		}
 
+		std::cout << "Typeid | " << typeid(a.begin()).name() << std::endl;
+
 		for (int i = 1; i < size; ++i) 
 			MEL::Send(a.begin(), a.end(), MEL::Datatype::INT, i, 0, comm);
 	}
@@ -38,6 +40,11 @@ int main(int argc, char *argv[]) {
 	MEL::MutexUnlock(mutex);
 
 	MEL::MutexFree(mutex);
+
+	if (rank == 0) {
+		char c; 
+		std::cin >> c;
+	}
 
 	MEL::Finalize();
 	return 0;
