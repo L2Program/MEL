@@ -2,56 +2,68 @@
 #include "MEL.hpp"
 #include "MEL_stream.hpp"
 
-int main(int argc, char *argv[]) {
-	MEL::Init(argc, argv);
-
+void runBcastTest() {
+	
 	MEL::Comm comm = MEL::Comm::WORLD;
 	const int rank = MEL::CommRank(comm),
-			  size = MEL::CommSize(comm);
+	  		  size = MEL::CommSize(comm);
 
-	/*
-	if (rank == 0) {
-		MEL::send_stream sstream(1, 0, comm, 32);
-
-		for (int i = 0; i < 50; ++i) {
-			//sendStream.write((const char*) &i, sizeof(int));
-			sstream << i;
-		}
-
-	}
-	else if (rank == 1) {
-		MEL::recv_stream rstream(0, 0, comm, 32);
-
-		for (int i = 0; i < 50; ++i) {
-			int j;
-			//recvStream.read((char*) &j, sizeof(int));
-			rstream >> j;
-
-			std::cout << "Received j = " << j << std::endl;
-		}
-	}
-	*/
+	MEL::Bcast_stream bstream(0, comm, 16);
 
 	if (rank == 0) {
-		MEL::bcast_stream bstream(0, comm);
-
 		for (int i = 0; i < 10; ++i) {
-			//sendStream.write((const char*) &i, sizeof(int));
 			bstream << i;
 		}
-
 	}
 	else {
-		MEL::bcast_stream bstream(0, comm);
-
 		for (int i = 0; i < 10; ++i) {
 			int j;
-			//recvStream.read((char*) &j, sizeof(int));
 			bstream >> j;
 
 			std::cout << "Rank " << rank << " Received j = " << j << std::endl;
 		}
 	}
+};
+
+void runSendRecvTest() {
+
+	MEL::Comm comm = MEL::Comm::WORLD;
+	const int rank = MEL::CommRank(comm),
+			  size = MEL::CommSize(comm);
+
+	if (rank == 0) {
+		std::vector<MEL::Send_stream*> sstreams;
+		for (int j = 1; j < size; ++j) {
+			sstreams.push_back(new MEL::Send_stream(j, 0, comm));
+		}
+		
+		for (int i = 0; i < 10; ++i) {
+			for (int j = 1; j < size; ++j) {
+				*(sstreams[j-1]) << (i);
+			}
+		}
+
+		for (int j = 0; j < size-1; ++j) {
+			delete sstreams[j];
+		}
+	}
+	else {
+		MEL::Recv_stream rstream(0, 0, comm);
+
+		for (int i = 0; i < 10; ++i) {
+			int j;
+			rstream >> j;
+
+			std::cout << "Rank " << rank << " Received j = " << j << std::endl;
+		}
+	}
+};
+
+int main(int argc, char *argv[]) {
+	MEL::Init(argc, argv);
+
+	runSendRecvTest();
+	runBcastTest();
 
 	MEL::Finalize();
 	return 0;
