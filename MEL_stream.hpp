@@ -207,7 +207,7 @@ namespace MEL {
 
 			while (len > 0) {
 				const int insertLen = std::min(len, (blockSize - index));
-
+					
 				if (insertLen > 0) {
 					std::memcpy(&buffer[block + index], cptr, insertLen);
 					cptr  += insertLen;
