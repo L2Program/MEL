@@ -34,43 +34,53 @@ SOFTWARE.
 
 namespace MEL {
 
-	class send_stream {
+	class Send_stream {
 	private:
 		/// Members		
 		const MEL::Comm comm;
-		const int dst, tag;
-		const int blockSize;
-		int index;
+		const int tag, blockSize;
+		int dst, index, block;
 		std::vector<char> buffer;
 		MEL::Request rq;
 
 		inline void put_block() {
+			if (dst < 0) MEL::Abort(-1, "Attempting to put to closed stream.");
+
 			MEL::Wait(rq);
-			rq = MEL::Isend(&buffer[0], blockSize, dst, tag, comm);
+			rq = MEL::Isend(&buffer[block], blockSize, dst, tag, comm);
 			index = 0;
+			block = (block == 0) ? blockSize : 0;
 		};
 
 	public:
-		send_stream(const int _dst, const int _tag, const MEL::Comm &_comm, const int _blockSize = 256)
-			: dst(_dst), tag(_tag), comm(_comm), blockSize(_blockSize), buffer(_blockSize, 0), index(0), rq(MEL::Request::REQUEST_NULL) {
+		Send_stream(const int _dst, const int _tag, const MEL::Comm &_comm, const int _blockSize = 256)
+			: dst(_dst), tag(_tag), comm(_comm), blockSize(_blockSize), 
+			  buffer(_blockSize * 2, 0), index(0), block(0), rq(MEL::Request::REQUEST_NULL) {
 		};
-		~send_stream() {
-			put_block();
+		~Send_stream() {
+			if (dst >= 0) put_block();
 		};
 
-		send_stream(const send_stream &old) = delete;
-		inline send_stream& operator=(const send_stream &old) = delete;
+		Send_stream(const Send_stream &old) = delete;
+		inline Send_stream operator=(const Send_stream &old) = delete;
+		Send_stream(Send_stream &&old) = delete;
+		inline Send_stream operator=(Send_stream &&old) = delete;
 
-		inline void write(const char *ptr, const int length) {
-			int len = length;
+		inline void close() {
+			if (dst >= 0) put_block();
+			dst = -1;
+		};
+
+		template<typename T>
+		inline void write(const T *ptr, const int length = 1) {
+			int len = length * sizeof(T);
 			char *cptr = (char*) ptr;
 
 			while (len > 0) {
 				const int insertLen = std::min(len, (blockSize - index));
 
 				if (insertLen > 0) {
-					//std::cout << "Inserting " << insertLen << " elements to buffer..." << std::endl;
-					std::memcpy(&buffer[index], cptr, insertLen);
+					std::memcpy(&buffer[block + index], cptr, insertLen);
 					cptr  += insertLen;
 					index += insertLen;
 					len   -= insertLen;	
@@ -81,45 +91,51 @@ namespace MEL {
 		};
 
 		template<typename T>
-		inline send_stream& operator<<(const T &val) {
-			write((const char*) &val, sizeof(T));
+		inline Send_stream& operator<<(const T &val) {
+			write(&val);
 			return *this;
 		};
 
 	};
 
-	class recv_stream {
+	class Recv_stream {
 	private:
 		/// Members		
 		const MEL::Comm comm;
-		const int src, tag;
-		const int blockSize;
-		int index;
+		const int tag, blockSize;
+		int src, index;
 		std::vector<char> buffer;
-		MEL::Request rq;
 
 		inline void get_block() {
+			if (src < 0) MEL::Abort(-1, "Attempting to get from closed stream.");
+
 			MEL::Recv(&buffer[0], blockSize, src, tag, comm);
 			index = 0;
 		};
 
 	public:
-		recv_stream(const int _src, const int _tag, const MEL::Comm &_comm, const int _blockSize = 256)
-			: src(_src), tag(_tag), comm(_comm), blockSize(_blockSize), buffer(_blockSize, 0), index(_blockSize), rq(MEL::Request::REQUEST_NULL) {
+		Recv_stream(const int _src, const int _tag, const MEL::Comm &_comm, const int _blockSize = 256)
+			: src(_src), tag(_tag), comm(_comm), blockSize(_blockSize), buffer(_blockSize, 0), index(_blockSize) {
 		};
 
-		recv_stream(const recv_stream &old) = delete;
-		inline recv_stream& operator=(const recv_stream &old) = delete;
+		Recv_stream(const Recv_stream &old) = delete;
+		inline Recv_stream operator=(const Recv_stream &old) = delete;
+		Recv_stream(Recv_stream &&old) = delete;
+		inline Recv_stream operator=(Recv_stream &&old) = delete;
 
-		inline void read(char *ptr, const int length) {
-			int len = length;
+		inline void close() {
+			src = -1;
+		};
+
+		template<typename T>
+		inline void read(T *ptr, const int length = 1) {
+			int len = length * sizeof(T);
 			char *cptr = (char*) ptr;
 
 			while (len > 0) {
 				const int retrieveLen = std::min(len, (blockSize - index));
 
 				if (retrieveLen > 0) {
-					//std::cout << "Retrieving " << retrieveLen << " elements from buffer..." << std::endl;
 					std::memcpy(ptr, &buffer[index], retrieveLen);
 					cptr  += retrieveLen;
 					index += retrieveLen;
@@ -131,74 +147,89 @@ namespace MEL {
 		};
 
 		template<typename T>
-		inline recv_stream& operator>>(T &val) {
-			read((char*) &val, sizeof(T));
+		inline Recv_stream& operator>>(T &val) {
+			read(&val);
 			return *this;
 		};
 	};
 
-	class bcast_stream {
+	class Bcast_stream {
 	private:
 		/// Members		
 		const MEL::Comm comm;
-		const int src, rank;
-		const int blockSize;
-		int index;
+		const int rank, blockSize;
+		int src, index, block;
 		std::vector<char> buffer;
 		MEL::Request rq;
 
 		inline void sync_block() {
-			if (rank == src) MEL::Wait(rq);
-			rq = MEL::Ibcast(&buffer[0], blockSize, src, comm);
-			if (rank != src) MEL::Wait(rq);
+			if (src < 0) MEL::Abort(-1, "Attempting to sync closed stream.");
+
+			if (rank == src) {
+				MEL::Wait(rq);
+				rq = MEL::Ibcast(&buffer[block], blockSize, src, comm);
+				block = (block == 0) ? blockSize : 0;
+			}
+			else {
+				rq = MEL::Ibcast(&buffer[0], blockSize, src, comm);
+				MEL::Wait(rq);
+			}
 			index = 0;
 		};
 
 	public:
-		bcast_stream(const int _src, const MEL::Comm &_comm, const int _blockSize = 256)
-			: src(_src), rank(MEL::CommRank(_comm)), comm(_comm), blockSize(_blockSize), buffer(_blockSize, 0), rq(MEL::Request::REQUEST_NULL) {
+		Bcast_stream(const int _src, const MEL::Comm &_comm, const int _blockSize = 256)
+			: src(_src), rank(MEL::CommRank(_comm)), comm(_comm), blockSize(_blockSize), 
+			  buffer(((rank == src) ? _blockSize * 2 : _blockSize), 0), block(0), rq(MEL::Request::REQUEST_NULL) {
 			index = (src == rank) ? 0 : blockSize;
 		};
 
-		~bcast_stream() {
+		~Bcast_stream() {
 			if (src == rank) sync_block();
 		};
 
-		bcast_stream(const bcast_stream &old) = delete;
-		inline bcast_stream& operator=(const bcast_stream &old) = delete;
+		Bcast_stream(const Bcast_stream &old) = delete;
+		inline Bcast_stream operator=(const Bcast_stream &old) = delete;
+		Bcast_stream(Bcast_stream &&old) = delete;
+		inline Bcast_stream operator=(Bcast_stream &&old) = delete;
 
-		inline void write(const char *ptr, const int length) {
+		inline void close() {
+			if (src == rank) sync_block();
+			src = -1;
+		};
+
+		template<typename T>
+		inline void write(const T *ptr, const int length = 1) {
 			if (src != rank) MEL::Abort(-1, "Attempting to write to read-only bcast_stream.");
 
-			int len = length;
+			int len = length * sizeof(T);
 			char *cptr = (char*) ptr;
 
 			while (len > 0) {
 				const int insertLen = std::min(len, (blockSize - index));
-
+					
 				if (insertLen > 0) {
-					//std::cout << "Inserting " << insertLen << " elements to buffer..." << std::endl;
-					std::memcpy(&buffer[index], cptr, insertLen);
-					cptr += insertLen;
+					std::memcpy(&buffer[block + index], cptr, insertLen);
+					cptr  += insertLen;
 					index += insertLen;
-					len -= insertLen;
+					len  -= insertLen;
 				}
 
 				if (index >= blockSize) sync_block();
 			}
 		};
 
-		inline void read(char *ptr, const int length) {
+		template<typename T>
+		inline void read(T *ptr, const int length = 1) {
 			if (src == rank) MEL::Abort(-1, "Attempting to read from write-only bcast_stream.");
 			
-			int len = length;
+			int len = length * sizeof(T);
 			char *cptr = (char*) ptr;
 
 			while (len > 0) {
 				const int retrieveLen = std::min(len, (blockSize - index));
 
 				if (retrieveLen > 0) {
-					//std::cout << "Retrieving " << retrieveLen << " elements from buffer..." << std::endl;
 					std::memcpy(ptr, &buffer[index], retrieveLen);
 					cptr  += retrieveLen;
 					index += retrieveLen;
@@ -210,24 +241,24 @@ namespace MEL {
 		};
 
 		template<typename T>
-		inline bcast_stream& operator<<(const T &val) {
-			write((const char*) &val, sizeof(T));
+		inline Bcast_stream& operator<<(const T &val) {
+			write(&val);
 			return *this;
 		};
 
 		template<typename T>
-		inline bcast_stream& operator>>(T &val) {
-			read((char*) &val, sizeof(T));
+		inline Bcast_stream& operator>>(T &val) {
+			read(&val);
 			return *this;
 		};
 
 		template<typename T>
-		inline bcast_stream& operator&(T &val) {
+		inline Bcast_stream& operator&(T &val) {
 			if (src == rank) {
-				write((const char*) &val, sizeof(T));
+				write(&val);
 			}
 			else {
-				read((char*) &val, sizeof(T));
+				read(&val));
 			}
 			return *this;
 		};
